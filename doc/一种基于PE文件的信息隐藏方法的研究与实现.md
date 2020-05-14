@@ -1,3 +1,7 @@
+---
+title: 一种基于PE文件的信息隐藏方法的研究与实现（信息隐藏相关）
+categories: 随想
+---
 # 研读文献————一种基于PE文件的信息隐藏方法的研究与实现（信息隐藏相关）
 
 ## 研究原因
@@ -46,7 +50,7 @@ RVA与文件偏移地址的差异是由于文件数据的存放单位与内存�
 
 论文使用的是mfc，基于WINNT.H这个头文件解析PE文件的，实际实现使用了Python的pefile库解析PE文件。
 
-简单Demo代码：
+简单Demo代码，实现了分批次的存储：
 
 encrypt:
 
@@ -80,11 +84,13 @@ def find_avaliable_addr(msg):
 
     for section in pe.sections:
 
-        #print (section.Name, hex(section.VirtualAddress),hex(section.Misc_VirtualSize), section.SizeOfRawData)
+        #print (section.Name, hex(section.VirtualAddress))
 
         if section.Name==b'.data\x00\x00\x00':
             data_rva=section.VirtualAddress
             print("find avaliable address blow .data address:",hex(data_rva))
+            section.Misc_VirtualSize=section.Misc_VirtualSize+128
+            print("chang section's virtualSize to: ",hex(section.Misc_VirtualSize))
     
     print("msg length is: ",len(msg))
     addr=data_rva-len(msg)
@@ -96,7 +102,7 @@ def find_avaliable_addr(msg):
     print("address ",hex(addr),"is avaliable!")
     return addr
     
-#插入秘密信息
+#插入秘密信息到单一段
 def insert_msg(addr,msg):
     if addr!=-1:
         index=0
@@ -113,11 +119,62 @@ def insert_msg(addr,msg):
         print("address is not valid")
     
 
+#找出存放拆分开的秘密信息的地址
+def find_avaliable_addr2(msg):
+    msg1=msg[:64]
+    msg2=msg[64:]
 
-if __name__=="__main__":
+    for section in pe.sections:
+        if section.Name==b'.data\x00\x00\x00':    
+            data1_rva=section.VirtualAddress-64
+            print("find avaliable address blow .data address:",hex(data1_rva))
+        
+        if section.Name==b'.rdata\x00\x00':    
+            data2_rva=section.VirtualAddress-64
+            print("find avaliable address blow .text address:",hex(data2_rva))
+
+    return [data1_rva,data2_rva]
+
+#插入秘密信息到多个段
+def insert_msg2(addr1,addr2,msg):
+    msg1=msg[:64]
+    msg2=msg[64:]
+
+    #塞msg1
+    index1=0
+    for char1 in msg1:
+        pe.set_dword_at_rva(addr1+index1,char1)
+        index1+=1
+
+     #塞msg2
+    index2=0
+    for char2 in msg2:
+        pe.set_dword_at_rva(addr2+index2,char2)
+        index2+=1
+
+    print("insert data into .data & .rdata")
+    pe.write(filename='.\\file_to_write2.exe')
+
+
+def test1():
     encrypted_msg=encrypt(raw_msg)
+    
+    #嵌入到单一段
     addr=find_avaliable_addr(encrypted_msg)
     insert_msg(addr,encrypted_msg)
+
+def test2():
+    encrypted_msg=encrypt(raw_msg)
+
+    #嵌入到多个段
+    addr=find_avaliable_addr2(encrypted_msg)
+    addr1=addr[0]
+    addr2=addr[1]
+    insert_msg2(addr1,addr2,encrypted_msg)
+
+if __name__=="__main__":
+    #test1()
+    test2()
 ```
 
 decrypt:
@@ -128,7 +185,7 @@ import pefile
 import binascii
 import rsa
 
-pe_path=".\\file_to_write1.exe"
+pe_path=".\\file_to_write2.exe"
 pe=pefile.PE(pe_path)
 msg_length=128
 
@@ -142,9 +199,18 @@ def get_addr():
             data_addr=section.VirtualAddress-128
             return data_addr
     return -1
-            
-if __name__=="__main__":
 
+def get_addr2():
+    for section in pe.sections:
+        if section.Name==b'.data\x00\x00\x00':
+            data_addr1=section.VirtualAddress-64
+            
+        if section.Name==b'.rdata\x00\x00':
+            data_addr2=section.VirtualAddress-64
+
+    return [data_addr1,data_addr2]
+
+def detest1():
     addr=get_addr()
 
     msg=pe.get_data(addr,msg_length)
@@ -154,4 +220,19 @@ if __name__=="__main__":
     print("inseted data: ",message)
 
 
+def detest2():
+    addr1=get_addr2()[0]
+    addr2=get_addr2()[1]
+
+    print("data1:",hex(addr1))
+    print("data2",hex(addr2))
+    data1=pe.get_data(addr1,64)
+    data2=pe.get_data(addr2,64)
+    data=data1+data2
+    message = rsa.decrypt(data, privkey).decode()
+    print("inseted data: ",message)
+
+if __name__=="__main__":
+
+    detest2()
 ```
